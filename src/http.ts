@@ -27,19 +27,11 @@ app.use(express.json({ limit: "1mb" }));
 type SessionEntry = {
 	server: ReturnType<typeof createSearxMcpServer>;
 	transport: StreamableHTTPServerTransport;
+	sessionId?: string;
 	close: () => Promise<void>;
 };
 
 const sessions = new Map<string, SessionEntry>();
-
-function removeSessionEntry(target: SessionEntry): void {
-	for (const [sessionId, entry] of sessions) {
-		if (entry === target) {
-			sessions.delete(sessionId);
-			return;
-		}
-	}
-}
 
 function getHeaderValue(
 	value: string | string[] | undefined,
@@ -139,10 +131,20 @@ function createSessionEntry(): SessionEntry {
 	let entry: SessionEntry;
 	let closePromise: Promise<void> | undefined;
 
+	const cleanup = (): void => {
+		if (entry.sessionId) {
+			sessions.delete(entry.sessionId);
+		}
+	};
+
 	const transport = new StreamableHTTPServerTransport({
 		sessionIdGenerator: () => randomUUID(),
 		onsessioninitialized: (sessionId) => {
+			entry.sessionId = sessionId;
 			sessions.set(sessionId, entry);
+		},
+		onsessionclosed: (sessionId) => {
+			sessions.delete(sessionId);
 		},
 	});
 
@@ -152,7 +154,7 @@ function createSessionEntry(): SessionEntry {
 		}
 
 		closePromise = (async () => {
-			removeSessionEntry(entry);
+			cleanup();
 			try {
 				await server.close();
 			} catch (error) {
@@ -166,7 +168,7 @@ function createSessionEntry(): SessionEntry {
 	entry = { server, transport, close };
 
 	transport.onclose = () => {
-		void close();
+		cleanup();
 	};
 
 	transport.onerror = (error) => {
